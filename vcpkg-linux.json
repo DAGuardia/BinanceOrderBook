@@ -1,0 +1,7 @@
+{
+  "name": "binance-orderbook-linux",
+  "version-string": "0.0.1",
+  "dependencies": [
+    "ixwebsocket"
+  ]
+}

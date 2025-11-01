@@ -1,0 +1,10 @@
+{
+  "name": "binance-orderbook",
+  "version-string": "0.0.1",
+  "dependencies": [
+    "cpr",
+    "nlohmann-json",
+    "ixwebsocket"
+  ],
+  "builtin-baseline": "ff645ac59d2b06586b8ef4187cf66328da60c0fd"
+}

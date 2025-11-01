@@ -1,0 +1,42 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        git \
+        curl \
+        ca-certificates \
+        pkg-config \
+        zip \
+        unzip \
+        tar \
+        openssl \
+        libssl-dev \
+        libssl3 \
+        libstdc++6 \
+        libgcc1 \
+        libmbedtls-dev \
+        libmbedcrypto7 \
+        libmbedtls14 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . /app
+
+RUN git clone https://github.com/microsoft/vcpkg.git /app/vcpkg && \
+    /app/vcpkg/bootstrap-vcpkg.sh
+
+ENV VCPKG_ROOT=/app/vcpkg
+ENV CMAKE_TOOLCHAIN_FILE=/app/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+RUN /app/vcpkg/vcpkg install
+
+RUN cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE} && \
+    cmake --build build --config Release
+
+WORKDIR /app/build
+ENTRYPOINT ["/app/build/BinanceOrderBook"]
