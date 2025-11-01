@@ -1,156 +1,286 @@
-﻿Binance Order Book Aggregator
+﻿# Binance Order Book Aggregator
 
-Proyecto en C++ que consume en tiempo real los streams de profundidad y trades de Binance, mantiene libros sincronizados por símbolo y publica snapshots periódicos en CSV con métricas agregadas.
+Proyecto en C++17 que consume en tiempo real los streams de profundidad y trades de Binance, mantiene libros sincronizados por símbolo y publica snapshots periódicos en CSV con métricas agregadas.
 
---------------------------------------------------------------------------------
+---
 
-DESCRIPCION GENERAL
+## 🧠 Descripción general
 
-El sistema mantiene libros de órdenes en memoria, actualizados en tiempo real a partir de streams de Binance.
-Para cada símbolo (por ejemplo "btcusdt", "ethusdt"), se ejecutan dos hilos:
-- DepthStream: escucha actualizaciones "@depth@500ms"
-- TradeStream: escucha trades "@trade"
+El sistema mantiene un libro de órdenes (order book) en memoria por cada símbolo (por ejemplo `btcusdt`, `ethusdt`), actualizado en tiempo real a partir de streams WebSocket de Binance y un snapshot REST inicial.
 
-Un BookSyncWorker combina ambas fuentes, aplicando las actualizaciones en el orden correcto según los campos U y u.
-Si se detecta un salto (gap) en la secuencia, el sistema se resincroniza automáticamente usando el snapshot REST inicial.
+Para cada símbolo se lanzan dos hilos independientes:
 
-Finalmente, un hilo Publisher toma snapshots consistentes y los exporta en formato CSV cada segundo.
+- **DepthStream**  
+  Escucha las actualizaciones de profundidad (`<symbol>@depth@500ms`), que contienen los cambios incrementales del libro (bids/asks con sus secuencias `U` y `u`).
 
---------------------------------------------------------------------------------
+- **TradeStream**  
+  Escucha el stream de trades ejecutados (`<symbol>@trade`), cada trade con precio ejecutado, cantidad y lado.
 
-COMPILACION (Windows)
+Ambos flujos alimentan un `BookSyncWorker`, que:
+1. Aplica las actualizaciones de profundidad en orden garantizado.
+2. Reconcilia trades recientes.
+3. Se resincroniza automáticamente si detecta gaps o pérdida de continuidad en las secuencias.
 
-Requisitos:
-- Visual Studio 2022 o superior
-- CMake 3.20+
-- vcpkg (para dependencias)
+Finalmente, un hilo único `Publisher` toma snapshots consistentes de todos los símbolos y los exporta en formato CSV cada segundo (stdout o archivo).
 
-Dependencias (instalar con vcpkg):
-vcpkg install cpr ixwebsocket nlohmann-json
+---
 
-Compilación:
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake
-cmake --build build --config Release
+## 🔩 Arquitectura de hilos
 
---------------------------------------------------------------------------------
-LLAMADAS A BINANCE
+| Componente             | Rol                                                                 | Tipo de hilo                |
+|------------------------|---------------------------------------------------------------------|-----------------------------|
+| `BinanceDepthStream`   | Escucha actualizaciones incrementales de libro (`@depth@500ms`).   | 1 hilo por símbolo          |
+| `BinanceTradeStream`   | Escucha trades ejecutados (`@trade`).                              | 1 hilo por símbolo          |
+| `BookSyncWorker`       | Aplica updates en orden, valida continuidad y resincroniza si hay gaps. | 1 hilo por símbolo     |
+| `Publisher`            | Publica snapshots agregados de todos los símbolos en CSV cada ~1s. | 1 hilo global               |
 
-REST /api/v3/depth
-Me da el snapshot del libro de órdenes con lastUpdateId, bids y asks agregados por precio.
-Lo uso como estado inicial.
+La publicación es atómica: cada snapshot que sale por consola/archivo representa un estado consistente entre book y trades en ese instante.
 
-WS <symbol>@depth@500ms
-Me da updates incrementales de libro con rango [U, u].
-Los aplico en orden para mantener el order book L2.
-Si hay salto en la secuencia → resync automático.
+---
 
-WS <symbol>@trade
-Me da cada trade ejecutado (precio p, cantidad q, lado del comprador vía m == true).
+## 🔁 Resincronización y consistencia
 
-Con eso calculo:
-último trade
-VWAP de sesión
-lado (buy/sell)
+El flujo de sincronización sigue las reglas oficiales del order book incremental de Binance:
 
-Con esas 3 fuentes vos armo:
-mid, spread, imbalance del book
-top N niveles
-últimas métricas de ejecución
-stream CSV cada segundo por símbolo
+1. Pedir snapshot inicial:  
+   `GET /api/v3/depth?symbol=SYMBOL&limit=N`
 
---------------------------------------------------------------------------------
-EJECUCION
+2. Guardar `lastUpdateId` del snapshot.
 
-Ejemplo de uso:
-BinanceOrderBook.exe --symbols=btcusdt,ethusdt --topN=5 --log=out.csv
+3. Conectarse al stream WebSocket `<symbol>@depth@500ms`.
 
-Parámetros:
---symbols -> lista de símbolos separados por coma
---topN -> cantidad de niveles a publicar
---log -> archivo CSV de salida (opcional, si no se indica se imprime por consola)
+4. Ignorar todos los mensajes cuya `u` (update final) sea `<= lastUpdateId`.
 
---------------------------------------------------------------------------------
+5. Encontrar el primer mensaje tal que `U <= lastUpdateId+1 <= u`.  
+   A partir de ahí, las actualizaciones son válidas para continuar el libro.
 
-FORMATO DEL CSV
+6. Aplicar incrementalmente las actualizaciones siguientes en orden.
 
-Cada línea representa un snapshot por símbolo:
-timestamp,symbol,mid,spread,bestBidPx,bestBidQty,bestAskPx,bestAskQty,topBids,topAsks,lastTradePx,lastTradeQty,lastTradeSide,vwapWin,vwapSession,imbalance
+7. Si en runtime se detecta un salto de secuencia (por ejemplo, `U > last_u + 1`), se loguea algo como:
+   ```text
+   [BookSync] GAP runtime btcusdt (last 2134439922, next 2134440025) -> resync
+   ```
+   y se vuelve automáticamente al paso 1 (snapshot REST) para ese símbolo.
+
+Esto asegura que el libro local se mantenga correcto incluso si se pierde algún paquete WS.
+
+---
+
+## 📊 Métricas que publica
+
+Para cada símbolo se calcula y publica continuamente:
+
+- `mid`: (bestAsk + bestBid) / 2
+- `spread`: bestAsk - bestBid
+- `bestBidPx` / `bestBidQty`
+- `bestAskPx` / `bestAskQty`
+- `topN` niveles de bid/ask agregados (precio:volumen)
+- Último trade ejecutado:
+  - `lastTradePx`
+  - `lastTradeQty`
+  - `lastTradeSide` = `"buy"` o `"sell"` (según `isBuyerMaker`)
+- VWAP de ventana corta
+- VWAP de sesión completa (desde el arranque del proceso)
+- `imbalance`: profundidad_bid / (profundidad_bid + profundidad_ask)
+
+El hilo `Publisher` emite un registro por símbolo por segundo aproximadamente.
+
+---
+
+## 🧾 Formato del CSV
+
+Cada línea es:  
+```text
+timestamp,
+symbol,
+mid,
+spread,
+bestBidPx,bestBidQty,
+bestAskPx,bestAskQty,
+topBids,
+topAsks,
+lastTradePx,lastTradeQty,lastTradeSide,
+vwapWin,vwapSession,
+imbalance
+```
 
 Ejemplo real:
+
+```text
 1761963153.309593,btcusdt,109579.995000,0.010000,109579.990000,3.380600,109580.000000,0.932690,109579.990000:3.380600|109579.980000:0.000100|...,109580.000000:0.932690|...,109580.860000,0.000050,buy,0.000000,109580.005646,0.789871
+```
 
-Campos destacados:
-- mid: (bestAsk + bestBid) / 2
-- spread: bestAsk - bestBid
-- topBids / topAsks: lista "precio:volumen" separada por "|"
-- lastTradeSide: "buy" o "sell" según isBuyerMaker
-- vwapSession: VWAP acumulado desde inicio de sesión
-- imbalance: profundidad_bid / (profundidad_bid + profundidad_ask)
+Notas:
+- `topBids` y `topAsks` son listas `precio:volumen` separadas por `"|"`.
+- `lastTradeSide` puede ser `"buy"` o `"sell"`.
+- `vwapSession` es el VWAP acumulado desde que arrancó el proceso.
+- `imbalance` mide qué tan cargado está el lado comprador vs vendedor.
 
---------------------------------------------------------------------------------
+---
 
-ARQUITECTURA DE HILOS
+## 📡 Llamadas a Binance
 
-Componente              | Rol                                          | Tipo
-------------------------|----------------------------------------------|----------------
-BinanceDepthStream      | Escucha actualizaciones de profundidad       | Hilo por símbolo
-BinanceTradeStream      | Escucha trades ejecutados                    | Hilo por símbolo
-BookSyncWorker          | Aplica updates garantizando orden y resincroniza si hay gaps | Hilo por símbolo
-Publisher               | Publica snapshots de todos los símbolos en CSV | 1 hilo global
+### REST: snapshot inicial
+`GET /api/v3/depth?symbol=BTCUSDT&limit=1000`
 
---------------------------------------------------------------------------------
+- Te da el estado del libro en crudo (`bids`, `asks`) y `lastUpdateId`.
+- El sistema lo usa como base inicial de cada símbolo antes de aplicar incrementales.
 
-RESINCRONIZACION
+### WebSocket: profundidad
+`<symbol>@depth@500ms`
 
-El flujo de sincronización cumple las reglas del API de Binance:
-1. Cargar snapshot REST "depth?limit=1000"
-2. Guardar lastUpdateId
-3. Escuchar "@depth@500ms"
-4. Descarta updates con u <= lastUpdateId
-5. Aplica el primer batch donde U <= lastUpdateId+1 <= u
-6. Aplica updates secuenciales garantizando continuidad
-7. Si falta un update -> resincroniza desde REST
+- Flujo incremental con niveles de precio y rangos `[U, u]`.
+- Es la fuente continua para mantener actualizado el order book L2/Top N.
 
-En runtime, si se detecta salto (U > last_u + 1), se loguea:
-[BookSync] GAP runtime btcusdt (last 2134439922, next 2134440025) -> resync
+### WebSocket: trades
+`<symbol>@trade`
 
-y el worker vuelve a traer snapshot REST.
+- Cada trade real ejecutado (precio `p`, cantidad `q`, lado comprador/vendedor).
+- Se usa para:
+  - Último trade visible
+  - Dirección del flujo de agresión (`buy` / `sell`)
+  - VWAP en ventana y sesión
 
---------------------------------------------------------------------------------
+---
 
-METRICAS EXPUESTAS
+## 🚀 Ejecución
 
-- Top-N niveles de libro
-- Precio medio (mid)
-- Spread
-- Imbalance (profundidad relativa bid/ask)
-- Último trade (precio, cantidad, lado)
-- VWAP sesión
-- VWAP ventana
+### Ejemplo en Windows / Linux nativo
+```bash
+BinanceOrderBook --symbols=btcusdt,ethusdt --topN=5 --log=out.csv
+```
 
---------------------------------------------------------------------------------
+Parámetros:
+- `--symbols`  
+  Lista separada por coma de símbolos spot de Binance (ej: `btcusdt,ethusdt`).
 
-EJEMPLO DE EJECUCION REAL
+- `--topN`  
+  Cantidad de niveles de libro a publicar en `topBids` / `topAsks`.
 
+- `--log` (opcional)  
+  Archivo CSV de salida.  
+  Si no se indica, el snapshot se imprime en stdout.
+
+Salida típica (recortada):
+```text
+[DepthStream] Conectado a btcusdt
 [TradeStream] Conectado btcusdt
-[DepthStream] Conectado btcusdt
-[DepthStream] Conectado ethusdt
+[DepthStream] Conectado a ethusdt
 [TradeStream] Conectado ethusdt
 
-1761963151.286440,btcusdt,109579.995000,0.010000,109579.990000,3.380600,109580.000000,0.932690,...,109580.000000,0.000610,buy,0.000000,109580.000000,0.789871
+1761963151.286440,btcusdt,109579.995000,0.010000,109579.990000,3.380600,109580.000000,0.932690,...,109580.860000,0.000050,buy,0.000000,109580.000000,0.789871
 1761963152.298617,btcusdt,109579.995000,0.010000,109579.990000,3.380600,109580.000000,0.932690,...,109579.990000,0.002300,sell,0.000000,109579.995936,0.789871
 1761963153.309593,btcusdt,109579.995000,0.010000,109579.990000,3.380600,109580.000000,0.932690,...,109580.860000,0.000050,buy,0.000000,109580.005646,0.789871
+```
 
---------------------------------------------------------------------------------
+---
 
-NOTAS FINALES
+## 🐳 Ejecución en Docker
 
-- Compatible con múltiples símbolos simultáneos
-- Sin data races (std::mutex en OrderBook y TradeStats)
-- Publicación atómica de snapshots consistentes
-- Diseño modular y extensible para nuevos exchanges
+El proyecto incluye una build Docker pensada para Linux que:
+- Usa `libcurl` del sistema (Ubuntu 22.04) para HTTPS.
+- Compila `cpr` contra esa `libcurl`, con `CPR_USE_SYSTEM_CURL=ON` para evitar conflictos TLS.
+- Instala `ixwebsocket` vía `vcpkg`, pero usando un manifiesto reducido (`vcpkg-linux.json`) que **solo** trae ixwebsocket en Linux.
+- Enlaza con OpenSSL de forma explícita (`OpenSSL::SSL`, `OpenSSL::Crypto`).
+
+Esto elimina el clásico error TLS al correr en contenedor:
+`SSL: could not create a context: error:00000000:lib(0)::reason(0)`
+
+### Archivos relevantes
+- `Dockerfile`  
+  Build de la app en Ubuntu 22.04.
+- `vcpkg-linux.json`  
+  Manifiesto alternativo para vcpkg en entorno Docker (solo `ixwebsocket`).  
+  Tu `vcpkg.json` normal para Windows queda intacto.
+
+### Build de la imagen
+```bash
+docker build -t binance-ob .
+```
+
+### Correr la imagen
+```bash
+docker run --rm binance-ob --symbols=btcusdt,ethusdt --topN=5
+```
+
+Salida típica en contenedor ya funcionando:
+```text
+1762039319.678570,btcusdt,109999.995000,0.010000,109999.990000,12.277870,110000.000000,0.982250,109999.990000:12.277870|...,110000.000000:0.982250|...,110017.000000,0.000060,sell,0.000000,110017.008571,0.926478
+[DepthStream] Conectado a btcusdt
+[TradeStream] Conectado btcusdt
+[DepthStream] Conectado a ethusdt
+[TradeStream] Conectado ethusdt
+```
+
+Si ves data de precios real y mensajes `Conectado`, significa:
+- REST HTTPS funciona dentro de Docker.
+- Los WebSockets TLS (`wss://...:9443`) también están conectando.
+- Estás streameando order book y trades de Binance en vivo desde adentro del contenedor, sin depender del host.
+
+---
+
+## ⚠️ Notas y limitaciones actuales
+
+- Reconexión:
+  - Si Binance cierra la conexión WS (por timeout, rate limit, etc.), hoy se loguea:
+    ```text
+    [TradeStream] Conexión cerrada btcusdt
+    [TradeStream] Detenido btcusdt
+    ```
+    y el hilo se apaga. Todavía no hay lógica de reconexión automática/ping keepalive.
+
+- Encoding:
+  - En Windows PowerShell puede aparecer `"Conexi�n"` por tema de UTF-8 vs CP1252.  
+    No afecta la lógica interna.
+
+- Seguridad TLS:
+  - En Linux la app valida certificados usando la CA store del sistema (`/etc/ssl/certs/ca-certificates.crt`).
+  - No se desactiva verificación SSL.
+
+- Performance:
+  - Los locks (`std::mutex`) en `OrderBook` y `TradeStats` protegen contra data races.
+  - `Publisher` toma snapshots consistentes: no mezcla mitad de un libro viejo con mitad de un trade nuevo.
+
+---
+
+## 🛠️ Compilación (Windows)
+
+### Requisitos
+- Visual Studio 2022 o superior
+- CMake 3.20+
+- vcpkg instalado y configurado (`VCPKG_ROOT` definido)
+
+### Dependencias (vcpkg)
+```bash
+vcpkg install cpr ixwebsocket nlohmann-json
+```
+
+### Build
+```bash
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake
+cmake --build build --config Release
+```
+
+El binario resultante (`BinanceOrderBook.exe`) acepta los mismos flags (`--symbols`, `--topN`, `--log`) que en Linux / Docker.
+
+---
+
+## 📚 Tecnologías y dependencias
+
+- **Lenguaje:** C++17
+- **HTTP REST:** [CPR](https://github.com/libcpr/cpr)
+- **WebSocket (wss):** [ixwebsocket](https://github.com/machinezone/IXWebSocket)
+- **JSON:** [nlohmann/json](https://github.com/nlohmann/json)
+- **TLS:** OpenSSL (en Linux), Schannel (Windows via cpr)
+- **Build system:** CMake
+- **Empaquetado deps:**
+  - Windows: `vcpkg.json` (full: `cpr`, `ixwebsocket`, `nlohmann-json`)
+  - Docker/Linux: `vcpkg-linux.json` (solo `ixwebsocket`) + `libcurl` del sistema
+
+---
+
+## 📄 Licencia
+
+MIT
 
 Autor: Damián Guardia
-Lenguaje: C++17
-Dependencias: CPR, IXWebSocket, nlohmann-json
-Licencia: MIT
