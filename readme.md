@@ -229,10 +229,6 @@ Si ves data de precios real y mensajes `Conectado`, significa:
     ```
     y el hilo se apaga. Todavía no hay lógica de reconexión automática/ping keepalive.
 
-- Encoding:
-  - En Windows PowerShell puede aparecer `"Conexi�n"` por tema de UTF-8 vs CP1252.  
-    No afecta la lógica interna.
-
 - Seguridad TLS:
   - En Linux la app valida certificados usando la CA store del sistema (`/etc/ssl/certs/ca-certificates.crt`).
   - No se desactiva verificación SSL.
