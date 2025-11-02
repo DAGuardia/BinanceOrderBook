@@ -4,6 +4,7 @@
 #include <thread>
 #include <atomic>
 #include <deque>
+#include <cstdint>
 
 #include "OrderBook.h"
 #include "BinanceRestClient.h"
@@ -13,17 +14,19 @@
 //
 // Responsabilidad:
 // - Mantener un OrderBook sincronizado en tiempo real para un símbolo.
-// - Flujo:
-//   1. Cargar snapshot inicial vía REST (depth limit=10), guardando lastUpdateId.
-//   2. Conectarse al WS de profundidad (<symbol>@depth@500ms).
-//   3. Reproducir las actualizaciones del WS hasta engancharse con el snapshot.
-//   4. Luego aplicar updates incrementales en orden asegurando continuidad.
-//   5. Si se detecta un gap en el orden esperado -> resync completo.
-//
+// - Flujo correcto Binance:
+//   1. Abrir el WS de profundidad (<symbol>@depth@500ms) y empezar a bufferizar updates.
+//   2. Bajar snapshot inicial vía REST (depth limit=10), guardar lastUpdateId.
+//   3. Reproducir desde el buffer hasta enganchar con el snapshot:
+//        Buscar el primer update cuyo rango [U,u] cubra snapshotLastUpdateId+1,
+//        aplicar en orden verificando continuidad.
+//   4. A partir de ahí aplicar incrementales asegurando continuidad estricta.
+//   5. Si hay gap -> resync: volver a bajar snapshot y marcar _isSynchronized=false.
+// 
 // Threading:
-// - start() lanza un thread interno (_workerThread).
-// - stop() pide shutdown ordenado.
-// - Es thread-safe respecto al ciclo de vida (start una vez, stop una vez).
+// - start() lanza el WS, baja snapshot y después crea el thread interno (_workerThread).
+// - run() drena updates en loop y mantiene el libro vivo.
+// - stop() apaga todo limpio.
 //
 class BookSyncWorker {
 public:
@@ -31,7 +34,7 @@ public:
         std::shared_ptr<OrderBook> orderBook,
         BinanceRestClient* restClient);
 
-    // Inicia el proceso de sync (REST snapshot + WS depth + loop interno)
+    // Inicia el proceso de sync (WS primero, luego snapshot REST, luego loop interno)
     void start();
 
     // Detiene el loop y cierra el WS
@@ -45,14 +48,14 @@ private:
 
     // Procesa un batch de DepthUpdate:
     // - Si no estamos sincronizados aún (_isSynchronized == false):
-    //     * descarta updates viejos
-    //     * busca el primer update que cubra snapshotLastUpdateId+1
-    //     * aplica en orden verificando continuidad
-    //     * marca el libro como sincronizado
+    //     * descartar updates viejos (u <= snapshotLastUpdateId)
+    //     * buscar primer update que cubra snapshotLastUpdateId+1
+    //     * aplicar todos en orden verificando continuidad estrica (prev.u+1 == curr.U)
+    //     * marcar sincronizado
     //
     // - Si ya estamos sincronizados:
-    //     * exige continuidad estricta con _lastAppliedUpdateId+1
-    //     * si hay gap -> resync con snapshot REST otra vez
+    //     * exigir continuidad exacta con _lastAppliedUpdateId+1
+    //     * si hay gap -> resync (nuevo snapshot REST, marcar _isSynchronized=false)
     void processBatch(std::deque<DepthUpdate>& pendingUpdates);
 
 private:
@@ -77,7 +80,7 @@ private:
     // Indica si el libro ya está alineado entre snapshot REST y updates WS
     std::atomic<bool> _isSynchronized{ false };
 
-    // lastUpdateId del snapshot inicial que bajamos por REST
+    // lastUpdateId del snapshot inicial o del último resync
     uint64_t _snapshotLastUpdateId = 0;
 
     // Último lastUpdateId que aplicamos con éxito sobre el libro

@@ -52,7 +52,7 @@ void BinanceDepthStream::start() {
                 return;
 
             case ix::WebSocketMessageType::Close:
-                std::cerr << "[DepthStream] Conexión cerrada para " << _symbolLower << "\n";
+                std::cerr << "[DepthStream] Conexion cerrada para " << _symbolLower << "\n";
                 return;
 
             case ix::WebSocketMessageType::Error:

@@ -56,7 +56,7 @@ void BinanceTradeStream::start() {
                 return;
 
             case ix::WebSocketMessageType::Close:
-                std::cerr << "[TradeStream] Conexión cerrada " << _symbolLower << "\n";
+                std::cerr << "[TradeStream] Conexion cerrada " << _symbolLower << "\n";
                 return;
 
             case ix::WebSocketMessageType::Error:
