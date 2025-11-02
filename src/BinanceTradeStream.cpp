@@ -96,7 +96,7 @@ void BinanceTradeStream::start() {
 
                 // Actualizar estadísticas del símbolo (último trade, VWAP sesión, etc.)
                 if (_tradeStats) {
-                    _tradeStats->onTrade(_symbolLower, price, quantity, isBuyerMaker);
+                    _tradeStats->onTrade(price, quantity, isBuyerMaker ? "sell" : "buy");
                 }
             }
             catch (const std::exception& ex) {

@@ -107,7 +107,7 @@ void Publisher::run() {
                 << snapTrade.last.price << ","
                 << snapTrade.last.qty << ","
                 << (snapTrade.last.side.empty() ? "none" : snapTrade.last.side) << ","
-                << 0.0 << "," // vwap_win placeholder (ventana 5m opcional)
+                << snapTrade.vwapWindow << ","
                 << snapTrade.vwapSession << ","
                 << imb;
 

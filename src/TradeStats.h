@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <mutex>
 #include <string>
+#include <deque>
 
 // -----------------------------------------------------------------------------
 // Estructuras auxiliares
@@ -17,6 +18,14 @@ struct LastTrade {
 struct TradeSnapshot {
     LastTrade last;           // Último trade conocido
     double vwapSession = 0.0; // VWAP acumulado (Σ p*q / Σ q)
+    double vwapWindow = 0.0;
+};
+
+//para calculo de vwap
+struct TimedTrade {
+    double ts;    // epoch seconds
+    double price;
+    double qty;
 };
 
 // -----------------------------------------------------------------------------
@@ -38,21 +47,18 @@ struct TradeSnapshot {
 // -----------------------------------------------------------------------------
 class TradeStats {
 public:
-    // Registra un nuevo trade recibido desde Binance.
-    //   symbol        - símbolo del instrumento (no se usa internamente, solo para consistencia)
-    //   price, qty    - precio y cantidad del trade
-    //   isBuyerMaker  - true si el vendedor fue el agresor (trade "sell")
-    void onTrade(const std::string& symbol,
-        double price,
-        double qty,
-        bool isBuyerMaker);
-
-    // Devuelve un snapshot inmutable de las métricas actuales (thread-safe).
-    TradeSnapshot snapshot() const;
+    void onTrade(double price, double qty, const std::string& sideFlag); // ya existe en tu código
+    TradeSnapshot snapshot() const; // vamos a ampliarla
 
 private:
-    mutable std::mutex _mtx;  // Protege acceso a métricas internas
-    LastTrade _last;          // Último trade recibido
-    double _sumPxQty = 0.0;   // Suma acumulada de precio * cantidad
-    double _sumQty = 0.0;   // Suma acumulada de cantidades
+    mutable std::mutex _mtx;
+
+    LastTrade _last;
+
+    // sesión completa
+    double _sumPxQty = 0.0;
+    double _sumQty = 0.0;
+
+    // ventana móvil de 5m
+    std::deque<TimedTrade> _recent;
 };
