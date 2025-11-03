@@ -38,31 +38,52 @@ La publicación es atómica: cada snapshot que sale por consola/archivo represen
 
 ---
 
-## 🔁 Resincronización y consistencia
+# 🔄 Flujo de sincronización del Order Book (Binance)
 
-El flujo de sincronización sigue las reglas oficiales del order book incremental de Binance:
+El proceso sigue las reglas oficiales del **incremental order book** de Binance Spot API.
 
-1. Pedir snapshot inicial:  
-   `GET /api/v3/depth?symbol=SYMBOL&limit=N`
+---
 
-2. Guardar `lastUpdateId` del snapshot.
+## 🧩 Secuencia completa
 
-3. Conectarse al stream WebSocket `<symbol>@depth@500ms`.
+1. **Conectarse primero al WebSocket**
+   ```
+   wss://stream.binance.com:9443/ws/<symbol>@depth@500ms
+   ```
 
-4. Ignorar todos los mensajes cuya `u` (update final) sea `<= lastUpdateId`.
+2. **Pedir el snapshot inicial (REST)**
+   ```
+   GET /api/v3/depth?symbol=SYMBOL&limit=N
+   ```
+   Guardar el `lastUpdateId` recibido.
 
-5. Encontrar el primer mensaje tal que `U <= lastUpdateId+1 <= u`.  
-   A partir de ahí, las actualizaciones son válidas para continuar el libro.
+3. **Descartar** todos los mensajes del WS cuya `u` (update final) sea `<= lastUpdateId`.
 
-6. Aplicar incrementalmente las actualizaciones siguientes en orden.
+4. **Encontrar el primer mensaje** que cumpla:
+   ```
+   U <= lastUpdateId + 1 <= u
+   ```
+   Ese mensaje es el punto de enganche entre el snapshot REST y el flujo WS.
 
-7. Si en runtime se detecta un salto de secuencia (por ejemplo, `U > last_u + 1`), se loguea algo como:
+5. **Aplicar** ese update y todos los siguientes en orden estricto.
+   Cada bloque debe cumplir continuidad exacta:
+   ```
+   next.U == prev.u + 1
+   ```
+
+6. **Mantener la sincronización en tiempo real** aplicando incrementales.
+
+   Si se detecta un salto de secuencia (por ejemplo, `U > last_u + 1`), se registra:
+
    ```text
    [BookSync] GAP runtime btcusdt (last 2134439922, next 2134440025) -> resync
    ```
-   y se vuelve automáticamente al paso 1 (snapshot REST) para ese símbolo.
 
-Esto asegura que el libro local se mantenga correcto incluso si se pierde algún paquete WS.
+   y se vuelve automáticamente al paso **2** (nuevo snapshot REST) para ese símbolo.
+
+---
+
+✅ Este mecanismo garantiza que el libro local refleje siempre el estado correcto, incluso si se pierden mensajes de WebSocket.
 
 ---
 
