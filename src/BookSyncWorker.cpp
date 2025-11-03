@@ -166,7 +166,7 @@ void BookSyncWorker::processBatch(std::deque<DepthUpdate>& pendingUpdates) {
         // después de sincronizar, cada update debe arrancar EXACTAMENTE en _lastAppliedUpdateId+1
         const uint64_t expectedFirstUpdateId = _lastAppliedUpdateId + 1;
 
-        //test en debug para romper sync: ok
+        ////test en debug para romper sync: ok
         //if (_symbol == "btcusdt") {
         //    update.firstUpdateId += 999999;
         //}

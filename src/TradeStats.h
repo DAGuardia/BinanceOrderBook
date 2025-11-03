@@ -47,8 +47,8 @@ struct TimedTrade {
 // -----------------------------------------------------------------------------
 class TradeStats {
 public:
-    void onTrade(double price, double qty, const std::string& sideFlag); // ya existe en tu código
-    TradeSnapshot snapshot() const; // vamos a ampliarla
+    void onTrade(double price, double qty, const std::string& sideFlag);
+    TradeSnapshot snapshot() const; 
 
 private:
     mutable std::mutex _mtx;

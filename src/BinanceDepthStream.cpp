@@ -24,7 +24,7 @@ void BinanceDepthStream::start() {
     // Ejemplo: wss://stream.binance.com:9443/ws/btcusdt@depth@500ms
     std::string wsUrl = "wss://stream.binance.com:9443/ws/" +
         _symbolLower +
-        "@depth@500ms";
+        "@depth@100ms";
 
     _ws.setUrl(wsUrl);
 
