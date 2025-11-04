@@ -48,7 +48,7 @@ El proceso sigue las reglas oficiales del **incremental order book** de Binance 
 
 1. **Conectarse primero al WebSocket**
    ```
-   wss://stream.binance.com:9443/ws/<symbol>@depth@500ms
+   wss://stream.binance.com:9443/ws/<symbol>@depth@100ms
    ```
 
 2. **Pedir el snapshot inicial (REST)**

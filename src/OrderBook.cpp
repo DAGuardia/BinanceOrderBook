@@ -1,4 +1,5 @@
 #include "OrderBook.h"
+#include <iostream>
 
 OrderBook::OrderBook(std::string sym)
     : _symbol(std::move(sym))
@@ -51,6 +52,18 @@ void OrderBook::applyDepthDelta(const DepthUpdate& update) {
         else
             _asks[price] = quantity;
     }
+    if (!_bids.empty() && !_asks.empty()) {
+        auto bb = _bids.begin()->first;
+        auto aa = _asks.begin()->first;
+        if (bb >= aa) {
+            std::cerr << "[CROSS] " << _symbol
+                << " bestBid=" << bb
+                << " bestAsk=" << aa
+                << " (bidsApplied=" << update.bids.size()
+                << ", asksApplied=" << update.asks.size() << ")\n";
+            // opcional: volcar los 3 primeros niveles de cada lado
+        }
+    }
 }
 
 BookSnapshot OrderBook::snapshot(int topN) {
@@ -96,9 +109,15 @@ bool OrderBook::isSane() const {
     if (bestBidPrice <= 0.0 || bestAskPrice <= 0.0)
         return false;
 
-    // bid nunca puede ser igual o mayor al ask
+    //// bid nunca puede ser igual o mayor al ask
     if (bestBidPrice >= bestAskPrice)
         return false;
 
     return true;
+}
+
+void OrderBook::clearAll() {
+    std::lock_guard<std::mutex> lock(_mtx);
+    _bids.clear();
+    _asks.clear();
 }

@@ -39,13 +39,16 @@ public:
 
     BookSnapshot snapshot(int topN);
     bool isSane() const;
+    void clearAll();
 
 private:
     std::string _symbol;
 
     // price -> qty
-    std::map<double, double, std::greater<double>> _bids;
-    std::map<double, double, std::less<double>>    _asks;
+    std::map<double, double, std::greater<double>> _bids; // descendente: begin() = best bid
+    std::map<double, double> _asks;                       // ascendente:  begin() = best ask
+
+
 
     mutable std::mutex _mtx;
 };

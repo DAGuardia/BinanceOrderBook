@@ -111,7 +111,7 @@ void Publisher::run() {
                 << snapTrade.vwapSession << ","
                 << imb;
 
-            // validación básica del libro (best_bid < best_ask, etc.)
+             //validación básica del libro (best_bid < best_ask, etc.)
             if (!bookPtr->isSane()) {
                 std::cerr << "[WARN] book inconsistente para " << sym << "\n";
             }

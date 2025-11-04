@@ -85,4 +85,7 @@ private:
 
     // Último lastUpdateId que aplicamos con éxito sobre el libro
     uint64_t _lastAppliedUpdateId = 0;
+
+    // Backlog persistente de updates del WS (no se pierde entre iteraciones)
+    std::deque<DepthUpdate> _backlog;
 };

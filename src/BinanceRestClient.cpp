@@ -92,6 +92,7 @@ bool BinanceRestClient::loadInitialBookSnapshot(const std::string& symbolLowerCa
     }
 
     outLastUpdateId = jsonResponse["lastUpdateId"].get<uint64_t>();
+    orderBook->clearAll();
 
     // Cargar niveles iniciales al OrderBook
     try {
